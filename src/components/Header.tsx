@@ -15,7 +15,7 @@ const Header = () => {
         <div className="mr-4 flex">
           <Link to="/" className="mr-6 flex items-center space-x-2">
             <span className="font-bold bg-gradient-to-r from-primary via-secondary to-accent bg-clip-text text-transparent">
-              AI Dev Suite
+              R2-D2 AI Dev Suite
             </span>
           </Link>
         </div>

@@ -1,22 +1,22 @@
-# Welcome to your GPT Engineer project
+# Welcome to your Lovable project
 
 ## Project info
 
-**URL**: https://run.gptengineer.app/projects/d574349c-6224-4f96-989e-3aa24be58dcb/improve
+**URL**: https://lovable.dev/projects/e6a92a29-dd5f-423a-9eb3-dd99015d0161
 
 ## How can I edit this code?
 
 There are several ways of editing your application.
 
-**Use GPT Engineer**
+**Use Lovable**
 
-Simply visit the GPT Engineer project at [GPT Engineer](https://gptengineer.app/projects/d574349c-6224-4f96-989e-3aa24be58dcb/improve) and start prompting.
+Simply visit the [Lovable Project](https://lovable.dev/projects/e6a92a29-dd5f-423a-9eb3-dd99015d0161) and start prompting.
 
-Changes made via gptengineer.app will be committed automatically to this repo.
+Changes made via Lovable will be committed automatically to this repo.
 
 **Use your preferred IDE**
 
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in the GPT Engineer UI.
+If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
 
 The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
 
@@ -62,10 +62,8 @@ This project is built with .
 
 ## How can I deploy this project?
 
-All GPT Engineer projects can be deployed directly via the GPT Engineer app.
-
-Simply visit your project at [GPT Engineer](https://gptengineer.app/projects/d574349c-6224-4f96-989e-3aa24be58dcb/improve) and click on Share -> Publish.
+Simply open [Lovable](https://lovable.dev/projects/e6a92a29-dd5f-423a-9eb3-dd99015d0161) and click on Share -> Publish.
 
 ## I want to use a custom domain - is that possible?
 
-We don't support custom domains (yet). If you want to deploy your project under your own domain then we recommend using Netlify. Visit our docs for more details: [Custom domains](https://docs.gptengineer.app/tips-tricks/custom-domain/)
+We don't support custom domains (yet). If you want to deploy your project under your own domain then we recommend using Netlify. Visit our docs for more details: [Custom domains](https://docs.lovable.dev/tips-tricks/custom-domain/)

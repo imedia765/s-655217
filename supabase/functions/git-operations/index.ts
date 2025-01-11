@@ -33,8 +33,6 @@ serve(async (req) => {
       auth: githubToken
     });
 
-    console.log('Initialized clients');
-
     if (type === 'getLastCommit') {
       console.log('Getting last commit for repo:', sourceRepoId);
       
@@ -44,70 +42,43 @@ serve(async (req) => {
         .eq('id', sourceRepoId)
         .single();
 
-      if (repoError) {
-        console.error('Error fetching repository:', repoError);
-        throw repoError;
-      }
-
-      if (!repo) {
-        console.error('Repository not found:', sourceRepoId);
-        throw new Error('Repository not found');
-      }
+      if (repoError) throw repoError;
+      if (!repo) throw new Error('Repository not found');
 
       console.log('Found repository:', repo.url);
 
       const [, owner, repoName] = repo.url.match(/github\.com\/([^\/]+)\/([^\/\.]+)/) || [];
-      
-      if (!owner || !repoName) {
-        console.error('Invalid repository URL format:', repo.url);
-        throw new Error('Invalid repository URL format');
-      }
+      if (!owner || !repoName) throw new Error('Invalid repository URL format');
 
       console.log('Fetching commit for:', { owner, repoName });
       
-      try {
-        // First get the repository details to check if it exists and get default branch
-        const { data: repoInfo } = await octokit.rest.repos.get({
-          owner,
-          repo: repoName
-        });
+      const { data: repoInfo } = await octokit.rest.repos.get({
+        owner,
+        repo: repoName
+      });
 
-        console.log('Repository info:', repoInfo);
+      const { data: commit } = await octokit.rest.repos.getCommit({
+        owner,
+        repo: repoName,
+        ref: repoInfo.default_branch
+      });
 
-        // Then get the latest commit from the default branch
-        const { data: commit } = await octokit.rest.repos.getCommit({
-          owner,
-          repo: repoName,
-          ref: repoInfo.default_branch
-        });
+      console.log('Got commit:', commit.sha);
 
-        console.log('Got commit:', commit.sha);
+      await supabaseClient
+        .from('repositories')
+        .update({ 
+          last_commit: commit.sha,
+          last_commit_date: commit.commit.author?.date,
+          last_sync: new Date().toISOString(),
+          status: 'synced'
+        })
+        .eq('id', sourceRepoId);
 
-        const { error: updateError } = await supabaseClient
-          .from('repositories')
-          .update({ 
-            last_commit: commit.sha,
-            last_commit_date: commit.commit.author?.date,
-            last_sync: new Date().toISOString(),
-            status: 'synced'
-          })
-          .eq('id', sourceRepoId);
-
-        if (updateError) {
-          console.error('Error updating repository:', updateError);
-          throw updateError;
-        }
-
-        console.log('Successfully updated repository with commit info');
-
-        return new Response(
-          JSON.stringify({ success: true, commit }),
-          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-      } catch (error) {
-        console.error('Error fetching commit:', error);
-        throw error;
-      }
+      return new Response(
+        JSON.stringify({ success: true, commit }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
     }
     
     if (type === 'push' && targetRepoId) {
@@ -118,95 +89,84 @@ serve(async (req) => {
         .select('*')
         .in('id', [sourceRepoId, targetRepoId]);
 
-      if (reposError) {
-        console.error('Error fetching repositories:', reposError);
-        throw reposError;
-      }
+      if (reposError) throw reposError;
 
       const sourceRepo = repos.find(r => r.id === sourceRepoId);
       const targetRepo = repos.find(r => r.id === targetRepoId);
 
       if (!sourceRepo || !targetRepo) {
-        console.error('Source or target repository not found');
         throw new Error('Source or target repository not found');
       }
 
-      console.log('Found repositories:', {
+      console.log('Processing repositories:', {
         source: sourceRepo.url,
         target: targetRepo.url
       });
 
+      // Extract owner and repo name from URLs
       const [, sourceOwner, sourceRepoName] = sourceRepo.url.match(/github\.com\/([^\/]+)\/([^\/\.]+)/) || [];
       const [, targetOwner, targetRepoName] = targetRepo.url.match(/github\.com\/([^\/]+)\/([^\/\.]+)/) || [];
 
       if (!sourceOwner || !sourceRepoName || !targetOwner || !targetRepoName) {
-        console.error('Invalid repository URL format');
         throw new Error('Invalid repository URL format');
       }
 
+      // Get source repository default branch and latest commit
+      const { data: sourceRepoInfo } = await octokit.rest.repos.get({
+        owner: sourceOwner,
+        repo: sourceRepoName
+      });
+
+      console.log('Source repo info:', {
+        defaultBranch: sourceRepoInfo.default_branch
+      });
+
+      // Get the latest commit from source's default branch
+      const { data: sourceBranch } = await octokit.rest.repos.getBranch({
+        owner: sourceOwner,
+        repo: sourceRepoName,
+        branch: sourceRepoInfo.default_branch,
+      });
+
+      console.log('Source branch data:', {
+        name: sourceBranch.name,
+        commitSha: sourceBranch.commit.sha
+      });
+
+      // Get target repository default branch
+      const { data: targetRepoInfo } = await octokit.rest.repos.get({
+        owner: targetOwner,
+        repo: targetRepoName
+      });
+
+      console.log('Target repo info:', {
+        defaultBranch: targetRepoInfo.default_branch
+      });
+
       try {
-        // First verify both repositories exist and get their default branches
-        const { data: sourceRepoInfo } = await octokit.rest.repos.get({
-          owner: sourceOwner,
-          repo: sourceRepoName
-        });
-
-        const { data: targetRepoInfo } = await octokit.rest.repos.get({
-          owner: targetOwner,
-          repo: targetRepoName
-        });
-
-        console.log('Repository info:', {
-          source: {
-            defaultBranch: sourceRepoInfo.default_branch,
-            hasIssues: sourceRepoInfo.has_issues
-          },
-          target: {
-            defaultBranch: targetRepoInfo.default_branch,
-            hasIssues: targetRepoInfo.has_issues
-          }
-        });
-
-        // Get the latest commit from source's default branch
-        const { data: branchData } = await octokit.rest.repos.getBranch({
-          owner: sourceOwner,
-          repo: sourceRepoName,
-          branch: sourceRepoInfo.default_branch,
-        });
-
-        console.log('Source branch data:', {
-          name: branchData.name,
-          commit: branchData.commit.sha
-        });
-
-        // Create a merge using GitHub's API
+        // Create merge using GitHub's API
         const mergeResult = await octokit.rest.repos.merge({
           owner: targetOwner,
           repo: targetRepoName,
           base: targetRepoInfo.default_branch,
-          head: branchData.commit.sha,
-          commit_message: `Merge from ${sourceRepo.nickname || sourceRepo.url}`
+          head: sourceBranch.commit.sha,
+          commit_message: `Merge from ${sourceRepo.nickname || sourceRepo.url} using ${pushType} strategy`
         });
 
-        console.log('Merge successful:', mergeResult);
+        console.log('Merge successful:', mergeResult.data);
 
         // Update both repositories' status
         const timestamp = new Date().toISOString();
         
-        const { error: updateError } = await supabaseClient
+        await supabaseClient
           .from('repositories')
           .update({ 
             last_sync: timestamp,
-            status: 'synced'
+            status: 'synced',
+            last_commit: sourceBranch.commit.sha,
+            last_commit_date: new Date().toISOString()
           })
           .in('id', [sourceRepoId, targetRepoId]);
-
-        if (updateError) {
-          console.error('Error updating repositories status:', updateError);
-          throw updateError;
-        }
-
-        console.log('Successfully updated repositories status');
 
         return new Response(
           JSON.stringify({ 
@@ -217,12 +177,12 @@ serve(async (req) => {
           { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       } catch (error) {
-        console.error('Error during push operation:', error);
+        console.error('Error during merge operation:', error);
         return new Response(
           JSON.stringify({ 
             success: false, 
             error: error.message,
-            details: error.response?.data || error.stack
+            details: error.response?.data || error
           }),
           { 
             headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -247,7 +207,7 @@ serve(async (req) => {
       JSON.stringify({ 
         success: false, 
         error: error.message,
-        details: error.response?.data || error.stack
+        details: error.response?.data || error
       }),
       { 
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },

@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { Octokit } from 'https://esm.sh/octokit'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -7,7 +8,7 @@ const corsHeaders = {
 }
 
 interface GitOperation {
-  type: 'push' | 'sync';
+  type: 'push' | 'sync' | 'delete' | 'getLastCommit';
   sourceRepoId: string;
   targetRepoId?: string;
   pushType?: 'regular' | 'force' | 'force-with-lease';
@@ -27,17 +28,60 @@ serve(async (req) => {
     // Create Supabase client
     const supabaseClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_ANON_KEY') ?? '',
-      { global: { headers: { Authorization: req.headers.get('Authorization')! } } }
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
     )
+
+    // Initialize Octokit
+    const octokit = new Octokit({
+      auth: Deno.env.get('GITHUB_ACCESS_TOKEN')
+    });
 
     // Log operation details
     console.log('Operation:', { type, sourceRepoId, targetRepoId, pushType });
 
-    // Simulate Git operation (in a real implementation, this would interact with Git)
-    const timestamp = new Date().toISOString()
+    if (type === 'getLastCommit') {
+      const { data: repo } = await supabaseClient
+        .from('repositories')
+        .select('url')
+        .eq('id', sourceRepoId)
+        .single();
+
+      if (!repo) throw new Error('Repository not found');
+
+      // Extract owner and repo name from URL
+      const [, owner, repoName] = repo.url.match(/github\.com\/([^\/]+)\/([^\/\.]+)/) || [];
+      
+      try {
+        const { data: commit } = await octokit.rest.repos.getCommit({
+          owner,
+          repo: repoName,
+          ref: 'HEAD'
+        });
+
+        await supabaseClient
+          .from('repositories')
+          .update({ 
+            last_commit: commit.sha,
+            last_commit_date: commit.commit.author?.date,
+            last_sync: new Date().toISOString(),
+            status: 'synced'
+          })
+          .eq('id', sourceRepoId);
+
+        return new Response(
+          JSON.stringify({ success: true, commit }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      } catch (error) {
+        console.error('Error fetching commit:', error);
+        throw error;
+      }
+    }
     
     if (type === 'push' && targetRepoId) {
+      // Simulate Git push operation
+      const timestamp = new Date().toISOString()
+      
       // Update target repository
       const { error: targetError } = await supabaseClient
         .from('repositories')
@@ -50,26 +94,26 @@ serve(async (req) => {
       if (targetError) throw targetError
       
       console.log('Target repository updated:', targetRepoId);
+
+      // Update source repository
+      const { error: sourceError } = await supabaseClient
+        .from('repositories')
+        .update({ 
+          last_sync: timestamp,
+          status: 'synced'
+        })
+        .eq('id', sourceRepoId)
+
+      if (sourceError) throw sourceError
+      
+      console.log('Source repository updated:', sourceRepoId);
     }
-
-    // Update source repository
-    const { error: sourceError } = await supabaseClient
-      .from('repositories')
-      .update({ 
-        last_sync: timestamp,
-        status: 'synced'
-      })
-      .eq('id', sourceRepoId)
-
-    if (sourceError) throw sourceError
-    
-    console.log('Source repository updated:', sourceRepoId);
 
     return new Response(
       JSON.stringify({ 
         success: true, 
         message: `Git ${type} operation completed successfully`,
-        timestamp 
+        timestamp: new Date().toISOString()
       }),
       { 
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },

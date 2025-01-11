@@ -14,6 +14,8 @@ export type Database = {
           created_at: string | null
           id: string
           is_master: boolean | null
+          last_commit: string | null
+          last_commit_date: string | null
           last_sync: string | null
           name: string
           nickname: string | null
@@ -25,6 +27,8 @@ export type Database = {
           created_at?: string | null
           id?: string
           is_master?: boolean | null
+          last_commit?: string | null
+          last_commit_date?: string | null
           last_sync?: string | null
           name: string
           nickname?: string | null
@@ -36,6 +40,8 @@ export type Database = {
           created_at?: string | null
           id?: string
           is_master?: boolean | null
+          last_commit?: string | null
+          last_commit_date?: string | null
           last_sync?: string | null
           name?: string
           nickname?: string | null

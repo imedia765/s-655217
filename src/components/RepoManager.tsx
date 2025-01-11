@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { GitBranch, GitCommit, Star, History, Tag, AlertTriangle } from "lucide-react";
+import { GitBranch, GitCommit, Star, History, Tag, AlertTriangle, Trash2, Edit2, RefreshCw } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { supabase } from "@/integrations/supabase/client";
 import {
@@ -26,6 +26,8 @@ interface Repository {
   is_master?: boolean;
   last_sync?: string;
   status?: string;
+  last_commit?: string;
+  last_commit_date?: string;
 }
 
 export function RepoManager() {
@@ -39,6 +41,9 @@ export function RepoManager() {
   const [showMasterWarning, setShowMasterWarning] = useState(false);
   const [confirmationStep, setConfirmationStep] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [repoToDelete, setRepoToDelete] = useState<string | null>(null);
+  const [editingRepo, setEditingRepo] = useState<Repository | null>(null);
   const { toast } = useToast();
 
   // Fetch repositories from Supabase
@@ -93,7 +98,16 @@ export function RepoManager() {
 
       if (error) throw error;
 
-      setRepositories(prev => [...prev, data]);
+      // Fetch last commit information
+      await supabase.functions.invoke('git-operations', {
+        body: {
+          type: 'getLastCommit',
+          sourceRepoId: data.id
+        }
+      });
+
+      await fetchRepositories(); // Refresh the list to get updated commit info
+      
       setRepoUrl("");
       setRepoLabel("");
       
@@ -106,6 +120,95 @@ export function RepoManager() {
       toast({
         title: "Error",
         description: "Failed to add repository",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleDeleteRepo = async (id: string) => {
+    try {
+      setIsLoading(true);
+      const { error } = await supabase
+        .from('repositories')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
+
+      setRepositories(prev => prev.filter(repo => repo.id !== id));
+      
+      toast({
+        title: "Success",
+        description: "Repository deleted successfully",
+      });
+    } catch (error) {
+      console.error('Error deleting repository:', error);
+      toast({
+        title: "Error",
+        description: "Failed to delete repository",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoading(false);
+      setShowDeleteConfirm(false);
+      setRepoToDelete(null);
+    }
+  };
+
+  const handleUpdateLabel = async (id: string, newLabel: string) => {
+    try {
+      setIsLoading(true);
+      const { error } = await supabase
+        .from('repositories')
+        .update({ nickname: newLabel })
+        .eq('id', id);
+
+      if (error) throw error;
+
+      setRepositories(prev => prev.map(repo => 
+        repo.id === id ? { ...repo, nickname: newLabel } : repo
+      ));
+      
+      toast({
+        title: "Success",
+        description: "Repository label updated successfully",
+      });
+    } catch (error) {
+      console.error('Error updating repository label:', error);
+      toast({
+        title: "Error",
+        description: "Failed to update repository label",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoading(false);
+      setEditingRepo(null);
+    }
+  };
+
+  const refreshLastCommit = async (id: string) => {
+    try {
+      setIsLoading(true);
+      await supabase.functions.invoke('git-operations', {
+        body: {
+          type: 'getLastCommit',
+          sourceRepoId: id
+        }
+      });
+
+      await fetchRepositories(); // Refresh the list to get updated commit info
+      
+      toast({
+        title: "Success",
+        description: "Repository information updated",
+      });
+    } catch (error) {
+      console.error('Error refreshing repository:', error);
+      toast({
+        title: "Error",
+        description: "Failed to refresh repository information",
         variant: "destructive",
       });
     } finally {
@@ -210,8 +313,6 @@ export function RepoManager() {
       setIsLoading(false);
     }
   };
-
-  // ... keep existing code (JSX rendering part remains the same)
 
   return (
     <Card className="p-6 space-y-6 bg-secondary/50 backdrop-blur-sm">
@@ -364,10 +465,46 @@ export function RepoManager() {
                       Set as Master
                     </Button>
                   )}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => refreshLastCommit(repo.id)}
+                    className="text-xs"
+                    disabled={isLoading}
+                  >
+                    <RefreshCw className="h-3 w-3 mr-1" />
+                    Refresh
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setEditingRepo(repo)}
+                    className="text-xs"
+                    disabled={isLoading}
+                  >
+                    <Edit2 className="h-3 w-3 mr-1" />
+                    Edit
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setRepoToDelete(repo.id);
+                      setShowDeleteConfirm(true);
+                    }}
+                    className="text-xs text-destructive"
+                    disabled={isLoading}
+                  >
+                    <Trash2 className="h-3 w-3 mr-1" />
+                    Delete
+                  </Button>
                 </div>
-                <span className="text-xs text-muted-foreground">
-                  Last synced: {repo.last_sync ? new Date(repo.last_sync).toLocaleString() : 'Never'}
-                </span>
+                <div className="text-xs text-muted-foreground space-y-1">
+                  <div>Last synced: {repo.last_sync ? new Date(repo.last_sync).toLocaleString() : 'Never'}</div>
+                  {repo.last_commit && (
+                    <div>Last commit: {repo.last_commit.substring(0, 7)} ({repo.last_commit_date ? new Date(repo.last_commit_date).toLocaleString() : 'Unknown'})</div>
+                  )}
+                </div>
               </div>
             ))}
           </div>
@@ -408,6 +545,57 @@ export function RepoManager() {
               className="bg-red-500 hover:bg-red-600"
             >
               {confirmationStep === 2 ? "Confirm Push" : "Continue"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Repository</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete this repository? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => {
+              setShowDeleteConfirm(false);
+              setRepoToDelete(null);
+            }}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => repoToDelete && handleDeleteRepo(repoToDelete)}
+              className="bg-red-500 hover:bg-red-600"
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={!!editingRepo} onOpenChange={(open) => !open && setEditingRepo(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Edit Repository Label</AlertDialogTitle>
+            <AlertDialogDescription>
+              <Input
+                value={editingRepo?.nickname || ''}
+                onChange={(e) => setEditingRepo(prev => prev ? {...prev, nickname: e.target.value} : null)}
+                placeholder="Enter new label"
+                className="mt-2"
+              />
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setEditingRepo(null)}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => editingRepo && handleUpdateLabel(editingRepo.id, editingRepo.nickname || '')}
+            >
+              Save
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

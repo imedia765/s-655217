@@ -7,13 +7,6 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-interface GitOperation {
-  type: 'push' | 'sync' | 'delete' | 'getLastCommit';
-  sourceRepoId: string;
-  targetRepoId?: string;
-  pushType?: 'regular' | 'force' | 'force-with-lease';
-}
-
 console.log('Git Operations Function Started');
 
 serve(async (req) => {
@@ -23,7 +16,7 @@ serve(async (req) => {
   }
 
   try {
-    const { type, sourceRepoId, targetRepoId, pushType } = await req.json() as GitOperation
+    const { type, sourceRepoId, targetRepoId, pushType } = await req.json();
     console.log('Received operation:', { type, sourceRepoId, targetRepoId, pushType });
 
     // Create Supabase client
@@ -77,10 +70,15 @@ serve(async (req) => {
       console.log('Fetching commit for:', { owner, repoName });
       
       try {
+        const { data: defaultBranch } = await octokit.rest.repos.get({
+          owner,
+          repo: repoName
+        });
+
         const { data: commit } = await octokit.rest.repos.getCommit({
           owner,
           repo: repoName,
-          ref: 'HEAD'
+          ref: defaultBranch.default_branch
         });
 
         console.log('Got commit:', commit.sha);
@@ -139,7 +137,7 @@ serve(async (req) => {
         target: targetRepo.url
       });
 
-      // Extract owner and repo info
+      // Extract owner and repo info for both repositories
       const [, sourceOwner, sourceRepoName] = sourceRepo.url.match(/github\.com\/([^\/]+)\/([^\/\.]+)/) || [];
       const [, targetOwner, targetRepoName] = targetRepo.url.match(/github\.com\/([^\/]+)\/([^\/\.]+)/) || [];
 
@@ -149,20 +147,37 @@ serve(async (req) => {
       }
 
       try {
+        // Get default branch for source repo
+        const { data: sourceRepoInfo } = await octokit.rest.repos.get({
+          owner: sourceOwner,
+          repo: sourceRepoName
+        });
+
+        // Get default branch for target repo
+        const { data: targetRepoInfo } = await octokit.rest.repos.get({
+          owner: targetOwner,
+          repo: targetRepoName
+        });
+
+        console.log('Default branches:', {
+          source: sourceRepoInfo.default_branch,
+          target: targetRepoInfo.default_branch
+        });
+
         // Get the latest commit from source
         const { data: sourceCommit } = await octokit.rest.repos.getCommit({
           owner: sourceOwner,
           repo: sourceRepoName,
-          ref: 'HEAD'
+          ref: sourceRepoInfo.default_branch
         });
 
         console.log('Got source commit:', sourceCommit.sha);
 
         // Create a merge using GitHub's API
-        const { data: mergeResult } = await octokit.rest.repos.merge({
+        const mergeResult = await octokit.rest.repos.merge({
           owner: targetOwner,
           repo: targetRepoName,
-          base: 'main', // or 'master' depending on your default branch
+          base: targetRepoInfo.default_branch,
           head: sourceCommit.sha,
           commit_message: `Merge from ${sourceRepo.nickname || sourceRepo.url}`
         });
@@ -191,7 +206,7 @@ serve(async (req) => {
           JSON.stringify({ 
             success: true, 
             message: `Push operation completed successfully`,
-            mergeResult
+            mergeResult: mergeResult.data
           }),
           { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );

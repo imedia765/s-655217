@@ -5,8 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { GitBranch, GitCommit, Star, History, Tag, AlertTriangle } from "lucide-react";
-import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
+import { supabase } from "@/integrations/supabase/client";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -21,17 +21,15 @@ import {
 interface Repository {
   id: string;
   url: string;
-  label?: string;
-  isMaster: boolean;
-  lastPushed?: string;
-  lastCommit?: string;
+  name?: string;
+  nickname?: string;
+  is_master?: boolean;
+  last_sync?: string;
+  status?: string;
 }
 
 export function RepoManager() {
-  const [repositories, setRepositories] = useState<Repository[]>(() => {
-    const saved = localStorage.getItem('git-repositories');
-    return saved ? JSON.parse(saved) : [];
-  });
+  const [repositories, setRepositories] = useState<Repository[]>([]);
   const [repoUrl, setRepoUrl] = useState("");
   const [repoLabel, setRepoLabel] = useState("");
   const [pushType, setPushType] = useState("regular");
@@ -40,17 +38,37 @@ export function RepoManager() {
   const [lastAction, setLastAction] = useState<string>("");
   const [showMasterWarning, setShowMasterWarning] = useState(false);
   const [confirmationStep, setConfirmationStep] = useState(0);
+  const [isLoading, setIsLoading] = useState(false);
   const { toast } = useToast();
 
+  // Fetch repositories from Supabase
   useEffect(() => {
-    localStorage.setItem('git-repositories', JSON.stringify(repositories));
-  }, [repositories]);
+    fetchRepositories();
+  }, []);
 
-  const handleAddRepo = (e: React.FormEvent) => {
+  const fetchRepositories = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('repositories')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+      setRepositories(data || []);
+    } catch (error) {
+      console.error('Error fetching repositories:', error);
+      toast({
+        title: "Error",
+        description: "Failed to fetch repositories",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleAddRepo = async (e: React.FormEvent) => {
     e.preventDefault();
     
     if (!repoUrl) {
-      console.error("Repository URL is required");
       toast({
         title: "Error",
         description: "Please enter a repository URL",
@@ -59,29 +77,44 @@ export function RepoManager() {
       return;
     }
 
-    const newRepo: Repository = {
-      id: crypto.randomUUID(),
-      url: repoUrl,
-      label: repoLabel,
-      isMaster: repositories.length === 0,
-      lastPushed: new Date().toISOString(),
-      lastCommit: "Initial commit"
-    };
+    try {
+      setIsLoading(true);
+      const { data, error } = await supabase
+        .from('repositories')
+        .insert({
+          url: repoUrl,
+          name: repoUrl.split('/').pop()?.replace('.git', '') || '',
+          nickname: repoLabel,
+          is_master: repositories.length === 0,
+          status: 'synced'
+        })
+        .select()
+        .single();
 
-    console.log("Adding new repository:", { url: repoUrl, label: repoLabel });
-    setRepositories(prev => [...prev, newRepo]);
-    setRepoUrl("");
-    setRepoLabel("");
-    
-    toast({
-      title: "Success",
-      description: `Repository added: ${repoLabel || repoUrl}`,
-    });
+      if (error) throw error;
+
+      setRepositories(prev => [...prev, data]);
+      setRepoUrl("");
+      setRepoLabel("");
+      
+      toast({
+        title: "Success",
+        description: `Repository added: ${repoLabel || repoUrl}`,
+      });
+    } catch (error) {
+      console.error('Error adding repository:', error);
+      toast({
+        title: "Error",
+        description: "Failed to add repository",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  const handlePushRepo = () => {
+  const handlePushRepo = async () => {
     if (!selectedSourceRepo || !selectedTargetRepo) {
-      console.error("Source and target repositories must be selected");
       toast({
         title: "Error",
         description: "Please select both source and target repositories",
@@ -92,58 +125,93 @@ export function RepoManager() {
 
     const targetRepo = repositories.find(r => r.id === selectedTargetRepo);
     
-    if (targetRepo?.isMaster && confirmationStep === 0) {
-      console.warn("Attempting to push to master repository - requiring confirmation");
+    if (targetRepo?.is_master && confirmationStep === 0) {
       setShowMasterWarning(true);
       return;
     }
 
-    const sourceRepo = repositories.find(r => r.id === selectedSourceRepo);
-    
-    // Simulate push operation with detailed logging
-    console.log(`%cPush Operation Started`, 'color: blue; font-weight: bold');
-    console.log(`From: ${sourceRepo?.label || sourceRepo?.url}`);
-    console.log(`To: ${targetRepo?.label || targetRepo?.url}`);
-    console.log(`Type: ${pushType}`);
+    try {
+      setIsLoading(true);
+      
+      const { data, error } = await supabase.functions.invoke('git-operations', {
+        body: {
+          type: 'push',
+          sourceRepoId: selectedSourceRepo,
+          targetRepoId: selectedTargetRepo,
+          pushType
+        }
+      });
 
-    const timestamp = new Date().toISOString();
-    setRepositories(prev => prev.map(repo => {
-      if (repo.id === selectedTargetRepo) {
-        return { ...repo, lastPushed: timestamp };
-      }
-      return repo;
-    }));
+      if (error) throw error;
 
-    const actionMessage = `Pushed from ${sourceRepo?.label || sourceRepo?.url} to ${targetRepo?.label || targetRepo?.url} at ${new Date().toLocaleTimeString()}`;
-    setLastAction(actionMessage);
-    console.log(`%cPush Operation Completed: ${actionMessage}`, 'color: green');
-    
-    toast({
-      title: "Success",
-      description: `Push completed with ${pushType} strategy`,
-    });
-
-    // Reset confirmation state
-    setConfirmationStep(0);
-    setShowMasterWarning(false);
+      const sourceRepo = repositories.find(r => r.id === selectedSourceRepo);
+      const actionMessage = `Pushed from ${sourceRepo?.nickname || sourceRepo?.url} to ${targetRepo?.nickname || targetRepo?.url} at ${new Date().toLocaleTimeString()}`;
+      setLastAction(actionMessage);
+      
+      await fetchRepositories(); // Refresh repositories list
+      
+      toast({
+        title: "Success",
+        description: `Push completed with ${pushType} strategy`,
+      });
+    } catch (error) {
+      console.error('Error during push operation:', error);
+      toast({
+        title: "Error",
+        description: "Failed to complete push operation",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoading(false);
+      setConfirmationStep(0);
+      setShowMasterWarning(false);
+    }
   };
 
   const handleMasterWarningConfirm = () => {
     setConfirmationStep(prev => prev + 1);
-    if (confirmationStep < 2) {
-      console.warn(`Master push confirmation step ${confirmationStep + 1} of 3`);
-    } else {
+    if (confirmationStep >= 2) {
       handlePushRepo();
     }
   };
 
-  const toggleMaster = (id: string) => {
-    console.log("Toggling master repository:", id);
-    setRepositories(prev => prev.map(repo => ({
-      ...repo,
-      isMaster: repo.id === id
-    })));
+  const toggleMaster = async (id: string) => {
+    try {
+      setIsLoading(true);
+      
+      // Update all repositories to not be master
+      await supabase
+        .from('repositories')
+        .update({ is_master: false })
+        .neq('id', id);
+
+      // Set the selected repository as master
+      const { error } = await supabase
+        .from('repositories')
+        .update({ is_master: true })
+        .eq('id', id);
+
+      if (error) throw error;
+
+      await fetchRepositories(); // Refresh the list
+      
+      toast({
+        title: "Success",
+        description: "Master repository updated",
+      });
+    } catch (error) {
+      console.error('Error toggling master repository:', error);
+      toast({
+        title: "Error",
+        description: "Failed to update master repository",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoading(false);
+    }
   };
+
+  // ... keep existing code (JSX rendering part remains the same)
 
   return (
     <Card className="p-6 space-y-6 bg-secondary/50 backdrop-blur-sm">
@@ -163,6 +231,7 @@ export function RepoManager() {
             value={repoUrl}
             onChange={(e) => setRepoUrl(e.target.value)}
             className="bg-background/50"
+            disabled={isLoading}
           />
         </div>
 
@@ -176,11 +245,12 @@ export function RepoManager() {
             value={repoLabel}
             onChange={(e) => setRepoLabel(e.target.value)}
             className="bg-background/50"
+            disabled={isLoading}
           />
         </div>
 
-        <Button type="submit" className="w-full">
-          Add Repository
+        <Button type="submit" className="w-full" disabled={isLoading}>
+          {isLoading ? "Adding..." : "Add Repository"}
         </Button>
       </form>
 
@@ -190,15 +260,19 @@ export function RepoManager() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="space-y-2">
             <label className="text-sm font-medium">Source Repository</label>
-            <Select value={selectedSourceRepo} onValueChange={setSelectedSourceRepo}>
+            <Select 
+              value={selectedSourceRepo} 
+              onValueChange={setSelectedSourceRepo}
+              disabled={isLoading}
+            >
               <SelectTrigger className="bg-background/50">
                 <SelectValue placeholder="Select source repository" />
               </SelectTrigger>
               <SelectContent>
                 {repositories.map(repo => (
                   <SelectItem key={repo.id} value={repo.id}>
-                    {repo.label || repo.url}
-                    {repo.isMaster && <Star className="inline h-4 w-4 ml-2 text-red-500" />}
+                    {repo.nickname || repo.url}
+                    {repo.is_master && <Star className="inline h-4 w-4 ml-2 text-red-500" />}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -207,15 +281,19 @@ export function RepoManager() {
 
           <div className="space-y-2">
             <label className="text-sm font-medium">Target Repository</label>
-            <Select value={selectedTargetRepo} onValueChange={setSelectedTargetRepo}>
+            <Select 
+              value={selectedTargetRepo} 
+              onValueChange={setSelectedTargetRepo}
+              disabled={isLoading}
+            >
               <SelectTrigger className="bg-background/50">
                 <SelectValue placeholder="Select target repository" />
               </SelectTrigger>
               <SelectContent>
                 {repositories.map(repo => (
                   <SelectItem key={repo.id} value={repo.id}>
-                    {repo.label || repo.url}
-                    {repo.isMaster && <Star className="inline h-4 w-4 ml-2 text-red-500" />}
+                    {repo.nickname || repo.url}
+                    {repo.is_master && <Star className="inline h-4 w-4 ml-2 text-red-500" />}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -225,7 +303,11 @@ export function RepoManager() {
 
         <div className="space-y-2">
           <label className="text-sm font-medium">Push Type</label>
-          <Select value={pushType} onValueChange={setPushType}>
+          <Select 
+            value={pushType} 
+            onValueChange={setPushType}
+            disabled={isLoading}
+          >
             <SelectTrigger className="bg-background/50">
               <SelectValue placeholder="Select push type" />
             </SelectTrigger>
@@ -237,8 +319,12 @@ export function RepoManager() {
           </Select>
         </div>
 
-        <Button onClick={handlePushRepo} className="w-full">
-          Push Repository
+        <Button 
+          onClick={handlePushRepo} 
+          className="w-full"
+          disabled={isLoading}
+        >
+          {isLoading ? "Pushing..." : "Push Repository"}
         </Button>
       </div>
 
@@ -253,19 +339,19 @@ export function RepoManager() {
               <div 
                 key={repo.id} 
                 className={`flex items-center justify-between p-3 rounded-md transition-colors ${
-                  repo.isMaster ? 'bg-red-500/10 border border-red-500/20' : 'bg-background/50'
+                  repo.is_master ? 'bg-red-500/10 border border-red-500/20' : 'bg-background/50'
                 }`}
               >
                 <div className="flex items-center gap-2">
-                  <GitCommit className={`h-4 w-4 ${repo.isMaster ? 'text-red-500' : 'text-muted-foreground'}`} />
+                  <GitCommit className={`h-4 w-4 ${repo.is_master ? 'text-red-500' : 'text-muted-foreground'}`} />
                   <span className="text-sm">{repo.url}</span>
-                  {repo.label && (
+                  {repo.nickname && (
                     <Badge variant="secondary" className="flex items-center gap-1">
                       <Tag className="h-3 w-3" />
-                      {repo.label}
+                      {repo.nickname}
                     </Badge>
                   )}
-                  {repo.isMaster ? (
+                  {repo.is_master ? (
                     <Star className="h-4 w-4 text-red-500" />
                   ) : (
                     <Button
@@ -273,13 +359,14 @@ export function RepoManager() {
                       size="sm"
                       onClick={() => toggleMaster(repo.id)}
                       className="text-xs"
+                      disabled={isLoading}
                     >
                       Set as Master
                     </Button>
                   )}
                 </div>
                 <span className="text-xs text-muted-foreground">
-                  Last pushed: {repo.lastPushed ? new Date(repo.lastPushed).toLocaleString() : 'Never'}
+                  Last synced: {repo.last_sync ? new Date(repo.last_sync).toLocaleString() : 'Never'}
                 </span>
               </div>
             ))}
